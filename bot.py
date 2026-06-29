@@ -31,11 +31,11 @@ def keep_alive():
     t.start()
 
 # ===================== CONFIG =====================
-BOT_TOKEN         = "8658807204:AAFbBpsd5hnytPuDB2_pXnVsa7wuBQWV6gY"
-CHANNEL_ID        = "-1002670575248"
-API_KEY           = "MUBTR1MKUBO"
-SUCCESS_OTP_URL   = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api/success-otp"
-HEADERS           = {"mauthapi": API_KEY}
+BOT_TOKEN       = "8658807204:AAFbBpsd5hnytPuDB2_pXnVsa7wuBQWV6gY"
+CHANNEL_ID      = "-1002670575248"
+API_KEY         = "MUBTR1MKUBO"
+SUCCESS_OTP_URL = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api/success-otp"
+HEADERS         = {"mauthapi": API_KEY}
 
 # বাংলাদেশ সময় (UTC+6)
 BD_TZ = timezone(timedelta(hours=6))
@@ -238,7 +238,6 @@ def extract_otp(message_text, phone_number=None):
 
     phone_digits = re.sub(r'\D', '', str(phone_number)) if phone_number else ""
 
-    # ধাপ ১: space দিয়ে আলাদা করা OTP (যেমন: 1 2 3 4 5 6)
     spaced = re.findall(r'\b(\d[\d ]{2,12}\d)\b', message_text)
     for match in spaced:
         joined = match.replace(" ", "")
@@ -249,7 +248,6 @@ def extract_otp(message_text, phone_number=None):
         if 4 <= len(joined) <= 8:
             return joined
 
-    # ধাপ ২: সরাসরি 4-8 ডিজিটের নম্বর
     candidates = re.findall(r'\b(\d{4,8})\b', message_text)
     for candidate in candidates:
         if phone_digits:
@@ -321,18 +319,16 @@ def send_to_channel(item):
     full_number = str(item.get("number", ""))
     clean_num   = re.sub(r'\D', '', full_number)
 
-    # দেশ তথ্য ফোন নাম্বার থেকে
     country_name = get_country_from_number(full_number)
     alpha2       = get_alpha2(country_name)
     flag         = get_flag(country_name)
     short_code   = get_short_code(country_name)
     lang         = get_language(alpha2)
 
-    # Display: masked number
     filled_num     = fill_xxx(full_number)
     display_masked = filled_num[:4] + "★★" + filled_num[-4:]
 
-    # RANGE COPY: API থেকে আসা number ফিল্ডের আসল ভ্যালু (digits only)
+    # RANGE COPY: API থেকে আসা number ফিল্ডের আসল ভ্যালু
     range_value = clean_num
 
     # OTP বের করো
@@ -364,10 +360,12 @@ def run_bot():
         try:
             r    = session.get(SUCCESS_OTP_URL, timeout=10)
             data = r.json()
+            print(f"[API Response] {data}")  # debug log
             if data.get("meta", {}).get("code") == 200:
                 otps = data.get("data", {}).get("otps", [])
                 for item in otps:
-                    msg_id = str(item.get("id", ""))
+                    # otp_id অথবা id — যেটা আসে সেটা নেবে
+                    msg_id = str(item.get("otp_id") or item.get("id") or "")
                     if msg_id and msg_id not in sent_otp_ids:
                         sent_otp_ids.add(msg_id)
                         save_sent_id(msg_id)
