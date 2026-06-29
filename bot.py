@@ -37,7 +37,6 @@ API_KEY         = "MUBTR1MKUBO"
 SUCCESS_OTP_URL = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api/success-otp"
 HEADERS         = {"mauthapi": API_KEY}
 
-# বাংলাদেশ সময় (UTC+6)
 BD_TZ = timezone(timedelta(hours=6))
 
 def bd_time():
@@ -46,7 +45,6 @@ def bd_time():
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
 
-# sent_otp_ids — restart এও পুরনো OTP মনে থাকবে
 SENT_OTP_FILE = "sent_otp_ids.pkl"
 
 def load_sent_ids():
@@ -231,23 +229,45 @@ def detect_service(msg):
         return "TELEGRAM"
     return "OTP"
 
-# ===================== OTP EXTRACT =====================
+# ===================== OTP EXTRACT (ফিক্সড) =====================
 def extract_otp(message_text, phone_number=None):
+    """
+    message থেকে সঠিক OTP বের করে।
+    যেমন: '<#> 730 915 est votre code' → '730915'
+    বা: 'Your OTP is 123456' → '123456'
+    """
     if not message_text:
         return None
 
     phone_digits = re.sub(r'\D', '', str(phone_number)) if phone_number else ""
 
-    spaced = re.findall(r'\b(\d[\d ]{2,12}\d)\b', message_text)
-    for match in spaced:
-        joined = match.replace(" ", "")
-        if not joined.isdigit():
-            continue
-        if phone_digits and (joined in phone_digits or phone_digits in joined):
-            continue
-        if 4 <= len(joined) <= 8:
+    # ধাপ ১: <#> বা [#] এর পরে space-separated digits (যেমন: <#> 730 915)
+    hash_match = re.search(r'[<\[#>\]]+\s*((?:\d+\s*){2,4})', message_text)
+    if hash_match:
+        joined = re.sub(r'\s', '', hash_match.group(1))
+        if joined.isdigit() and 4 <= len(joined) <= 8:
             return joined
 
+    # ধাপ ২: "code" বা "OTP" কীওয়ার্ডের আশেপাশে space-separated digits
+    keyword_match = re.search(
+        r'(?:code|otp|pin|token|verification)[^\d]*(\d[\d\s]{1,10}\d)',
+        message_text, re.IGNORECASE
+    )
+    if keyword_match:
+        joined = re.sub(r'\s', '', keyword_match.group(1))
+        if joined.isdigit() and 4 <= len(joined) <= 8:
+            if not phone_digits or joined not in phone_digits:
+                return joined
+
+    # ধাপ ৩: পুরো message এ space-separated digit groups (যেমন: 730 915)
+    spaced = re.findall(r'\b(\d{2,4})\s+(\d{2,4})\b', message_text)
+    for g1, g2 in spaced:
+        joined = g1 + g2
+        if joined.isdigit() and 4 <= len(joined) <= 8:
+            if not phone_digits or joined not in phone_digits:
+                return joined
+
+    # ধাপ ৪: সরাসরি 4-8 ডিজিটের নম্বর
     candidates = re.findall(r'\b(\d{4,8})\b', message_text)
     for candidate in candidates:
         if phone_digits:
@@ -255,27 +275,12 @@ def extract_otp(message_text, phone_number=None):
                 continue
             if phone_digits.endswith(candidate):
                 continue
-            if phone_digits[-8:] == candidate:
-                continue
         if 4 <= len(candidate) <= 8:
             return candidate
 
     return None
 
 # ===================== HELPERS =====================
-def get_country_info(number):
-    try:
-        clean_number = re.sub(r'\D', '', str(number))
-        parsed_number = phonenumbers.parse("+" + clean_number, None)
-        country_name = geocoder.country_name_for_number(parsed_number, "en")
-        alpha2 = get_alpha2(country_name)
-        flag   = get_flag(country_name)
-        short  = get_short_code(country_name)
-        lang   = get_language(alpha2)
-        return flag, short, lang, country_name if country_name else "Unknown"
-    except Exception:
-        return "🌐", "#??", "English", "Unknown"
-
 def build_message(masked_number, flag, short_code, service, lang):
     current_time = bd_time()
     return (
@@ -325,11 +330,12 @@ def send_to_channel(item):
     short_code   = get_short_code(country_name)
     lang         = get_language(alpha2)
 
+    # Display: masked (প্রথম ৪ + ★★ + শেষ ৪)
     filled_num     = fill_xxx(full_number)
     display_masked = filled_num[:4] + "★★" + filled_num[-4:]
 
-    # RANGE COPY: API থেকে আসা number ফিল্ডের আসল ভ্যালু
-    range_value = clean_num
+    # RANGE COPY: নাম্বারের শেষ ৪ ডিজিট বাদ দিয়ে বাকিটা
+    range_value = clean_num[:-4] if len(clean_num) > 4 else clean_num
 
     # OTP বের করো
     otp_code = extract_otp(otp_msg, full_number)
@@ -339,8 +345,10 @@ def send_to_channel(item):
             otp_code = m.group()
         else:
             digits = re.sub(r'\D', '', otp_msg)
-            digits = digits.replace(clean_num, "").replace(clean_num[-8:], "")
+            digits = digits.replace(clean_num, "")
             otp_code = digits[:8] if digits else "------"
+
+    print(f"[OTP] number={clean_num} | otp={otp_code} | range={range_value} | msg={otp_msg}")
 
     service = detect_service(otp_msg)
     text    = build_message(display_masked, flag, short_code, service, lang)
@@ -360,17 +368,17 @@ def run_bot():
         try:
             r    = session.get(SUCCESS_OTP_URL, timeout=10)
             data = r.json()
-            print(f"[API Response] {data}")  # debug log
             if data.get("meta", {}).get("code") == 200:
                 otps = data.get("data", {}).get("otps", [])
                 for item in otps:
-                    # otp_id অথবা id — যেটা আসে সেটা নেবে
                     msg_id = str(item.get("otp_id") or item.get("id") or "")
                     if msg_id and msg_id not in sent_otp_ids:
                         sent_otp_ids.add(msg_id)
                         save_sent_id(msg_id)
                         send_to_channel(item)
                         time.sleep(1)
+            else:
+                print(f"[API] meta={data.get('meta')}")
         except Exception as e:
             print(f"[BOT Error] {e}")
         time.sleep(2)
