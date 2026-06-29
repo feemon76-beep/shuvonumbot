@@ -46,6 +46,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
 
 SENT_OTP_FILE = "sent_otp_ids.pkl"
+sent_lock = threading.Lock()
 
 def load_sent_ids():
     if os.path.exists(SENT_OTP_FILE):
@@ -56,9 +57,10 @@ def load_sent_ids():
     return set()
 
 def save_sent_id(msg_id):
-    ids = load_sent_ids()
-    ids.add(msg_id)
-    pickle.dump(ids, open(SENT_OTP_FILE, "wb"))
+    with sent_lock:
+        ids = load_sent_ids()
+        ids.add(msg_id)
+        pickle.dump(ids, open(SENT_OTP_FILE, "wb"))
 
 sent_otp_ids = load_sent_ids()
 
@@ -229,13 +231,8 @@ def detect_service(msg):
         return "TELEGRAM"
     return "OTP"
 
-# ===================== OTP EXTRACT (ফিক্সড) =====================
+# ===================== OTP EXTRACT =====================
 def extract_otp(message_text, phone_number=None):
-    """
-    message থেকে সঠিক OTP বের করে।
-    যেমন: '<#> 730 915 est votre code' → '730915'
-    বা: 'Your OTP is 123456' → '123456'
-    """
     if not message_text:
         return None
 
@@ -248,9 +245,9 @@ def extract_otp(message_text, phone_number=None):
         if joined.isdigit() and 4 <= len(joined) <= 8:
             return joined
 
-    # ধাপ ২: "code" বা "OTP" কীওয়ার্ডের আশেপাশে space-separated digits
+    # ধাপ ২: "code/otp/pin" কীওয়ার্ডের কাছে digits
     keyword_match = re.search(
-        r'(?:code|otp|pin|token|verification)[^\d]*(\d[\d\s]{1,10}\d)',
+        r'(?:code|otp|pin|token|verification)[^\d]{0,10}(\d[\d\s]{1,10}\d)',
         message_text, re.IGNORECASE
     )
     if keyword_match:
@@ -259,7 +256,7 @@ def extract_otp(message_text, phone_number=None):
             if not phone_digits or joined not in phone_digits:
                 return joined
 
-    # ধাপ ৩: পুরো message এ space-separated digit groups (যেমন: 730 915)
+    # ধাপ ৩: space-separated digit pairs (যেমন: 730 915)
     spaced = re.findall(r'\b(\d{2,4})\s+(\d{2,4})\b', message_text)
     for g1, g2 in spaced:
         joined = g1 + g2
@@ -267,7 +264,7 @@ def extract_otp(message_text, phone_number=None):
             if not phone_digits or joined not in phone_digits:
                 return joined
 
-    # ধাপ ৪: সরাসরি 4-8 ডিজিটের নম্বর
+    # ধাপ ৪: সরাসরি 4-8 ডিজিট
     candidates = re.findall(r'\b(\d{4,8})\b', message_text)
     for candidate in candidates:
         if phone_digits:
@@ -318,75 +315,128 @@ def build_markup(otp_code, range_value):
     )
     return markup
 
-# ===================== BOT — success-otp API =====================
+# ===================== SEND TO CHANNEL (retry সহ) =====================
 def send_to_channel(item):
-    otp_msg     = item.get("message", "")
-    full_number = str(item.get("number", ""))
-    clean_num   = re.sub(r'\D', '', full_number)
-
-    country_name = get_country_from_number(full_number)
-    alpha2       = get_alpha2(country_name)
-    flag         = get_flag(country_name)
-    short_code   = get_short_code(country_name)
-    lang         = get_language(alpha2)
-
-    # Display: masked (প্রথম ৪ + ★★ + শেষ ৪)
-    filled_num     = fill_xxx(full_number)
-    display_masked = filled_num[:4] + "★★" + filled_num[-4:]
-
-    # RANGE COPY: নাম্বারের শেষ ৪ ডিজিট বাদ দিয়ে বাকিটা
-    range_value = clean_num[:-4] if len(clean_num) > 4 else clean_num
-
-    # OTP বের করো
-    otp_code = extract_otp(otp_msg, full_number)
-    if not otp_code:
-        m = re.search(r'\b\d{4,8}\b', otp_msg)
-        if m:
-            otp_code = m.group()
-        else:
-            digits = re.sub(r'\D', '', otp_msg)
-            digits = digits.replace(clean_num, "")
-            otp_code = digits[:8] if digits else "------"
-
-    print(f"[OTP] number={clean_num} | otp={otp_code} | range={range_value} | msg={otp_msg}")
-
-    service = detect_service(otp_msg)
-    text    = build_message(display_masked, flag, short_code, service, lang)
-    markup  = build_markup(otp_code, range_value)
-
     try:
-        bot.send_message(CHANNEL_ID, text, reply_markup=markup)
-    except Exception as e:
-        print(f"[BOT Send Error] {e}")
+        otp_msg     = item.get("message", "")
+        full_number = str(item.get("number", ""))
+        clean_num   = re.sub(r'\D', '', full_number)
 
+        country_name = get_country_from_number(full_number)
+        alpha2       = get_alpha2(country_name)
+        flag         = get_flag(country_name)
+        short_code   = get_short_code(country_name)
+        lang         = get_language(alpha2)
+
+        # Display: masked
+        filled_num     = fill_xxx(full_number)
+        display_masked = filled_num[:4] + "★★" + filled_num[-4:]
+
+        # RANGE COPY: শেষ ৪ ডিজিট বাদ
+        range_value = clean_num[:-4] if len(clean_num) > 4 else clean_num
+
+        # OTP বের করো
+        otp_code = extract_otp(otp_msg, full_number)
+        if not otp_code:
+            m = re.search(r'\b\d{4,8}\b', otp_msg)
+            if m:
+                otp_code = m.group()
+            else:
+                digits = re.sub(r'\D', '', otp_msg)
+                digits = digits.replace(clean_num, "")
+                otp_code = digits[:8] if digits else "------"
+
+        print(f"[OTP] num={clean_num} | otp={otp_code} | range={range_value} | msg={otp_msg}")
+
+        service = detect_service(otp_msg)
+        text    = build_message(display_masked, flag, short_code, service, lang)
+        markup  = build_markup(otp_code, range_value)
+
+        # Retry: ৩ বার চেষ্টা করবে
+        for attempt in range(3):
+            try:
+                bot.send_message(CHANNEL_ID, text, reply_markup=markup)
+                return True
+            except Exception as e:
+                print(f"[Send Attempt {attempt+1} Failed] {e}")
+                time.sleep(2)
+        print("[Send Failed] সব attempt শেষ")
+        return False
+
+    except Exception as e:
+        print(f"[send_to_channel Error] {e}")
+        return False
+
+# ===================== BOT LOOP =====================
 def run_bot():
     print("🚀 BOT (success-otp) started...")
     session = requests.Session()
     session.headers.update(HEADERS)
+    consecutive_errors = 0
 
     while True:
         try:
-            r    = session.get(SUCCESS_OTP_URL, timeout=10)
+            r = session.get(SUCCESS_OTP_URL, timeout=15)
             data = r.json()
+            consecutive_errors = 0  # সফল হলে error count রিসেট
+
             if data.get("meta", {}).get("code") == 200:
                 otps = data.get("data", {}).get("otps", [])
                 for item in otps:
                     msg_id = str(item.get("otp_id") or item.get("id") or "")
-                    if msg_id and msg_id not in sent_otp_ids:
-                        sent_otp_ids.add(msg_id)
+                    if not msg_id:
+                        continue
+                    with sent_lock:
+                        already_sent = msg_id in sent_otp_ids
+                        if not already_sent:
+                            sent_otp_ids.add(msg_id)
+                    if not already_sent:
                         save_sent_id(msg_id)
                         send_to_channel(item)
-                        time.sleep(1)
+                        time.sleep(0.5)
             else:
-                print(f"[API] meta={data.get('meta')}")
+                print(f"[API] unexpected response: {data.get('meta')}")
+
+        except requests.exceptions.Timeout:
+            print("[BOT] Request timeout, retrying...")
+            consecutive_errors += 1
+        except requests.exceptions.ConnectionError:
+            print("[BOT] Connection error, retrying...")
+            consecutive_errors += 1
         except Exception as e:
             print(f"[BOT Error] {e}")
-        time.sleep(2)
+            consecutive_errors += 1
+
+        # অনেক বেশি error হলে session রিসেট
+        if consecutive_errors >= 5:
+            print("[BOT] Too many errors, resetting session...")
+            session = requests.Session()
+            session.headers.update(HEADERS)
+            consecutive_errors = 0
+            time.sleep(10)
+        else:
+            time.sleep(2)
+
+# ===================== WATCHDOG — বট বন্ধ হলে restart =====================
+def watchdog():
+    while True:
+        time.sleep(60)
+        for t in threading.enumerate():
+            if t.name == "bot_thread" and not t.is_alive():
+                print("[WATCHDOG] Bot thread died! Restarting...")
+                new_thread = threading.Thread(target=run_bot, name="bot_thread", daemon=True)
+                new_thread.start()
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
     keep_alive()
-    threading.Thread(target=run_bot, daemon=True).start()
+
+    bot_thread = threading.Thread(target=run_bot, name="bot_thread", daemon=True)
+    bot_thread.start()
+
+    wd_thread = threading.Thread(target=watchdog, name="watchdog", daemon=True)
+    wd_thread.start()
+
     print("✅ Bot running!")
     while True:
         time.sleep(60)
