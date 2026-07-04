@@ -238,14 +238,12 @@ def extract_otp(message_text, phone_number=None):
 
     phone_digits = re.sub(r'\D', '', str(phone_number)) if phone_number else ""
 
-    # ধাপ ১: <#> বা [#] এর পরে space-separated digits (যেমন: <#> 730 915)
     hash_match = re.search(r'[<\[#>\]]+\s*((?:\d+\s*){2,4})', message_text)
     if hash_match:
         joined = re.sub(r'\s', '', hash_match.group(1))
         if joined.isdigit() and 4 <= len(joined) <= 8:
             return joined
 
-    # ধাপ ২: "code/otp/pin" কীওয়ার্ডের কাছে digits
     keyword_match = re.search(
         r'(?:code|otp|pin|token|verification)[^\d]{0,10}(\d[\d\s]{1,10}\d)',
         message_text, re.IGNORECASE
@@ -256,7 +254,6 @@ def extract_otp(message_text, phone_number=None):
             if not phone_digits or joined not in phone_digits:
                 return joined
 
-    # ধাপ ৩: space-separated digit pairs (যেমন: 730 915)
     spaced = re.findall(r'\b(\d{2,4})\s+(\d{2,4})\b', message_text)
     for g1, g2 in spaced:
         joined = g1 + g2
@@ -264,7 +261,6 @@ def extract_otp(message_text, phone_number=None):
             if not phone_digits or joined not in phone_digits:
                 return joined
 
-    # ধাপ ৪: সরাসরি 4-8 ডিজিট
     candidates = re.findall(r'\b(\d{4,8})\b', message_text)
     for candidate in candidates:
         if phone_digits:
@@ -299,20 +295,40 @@ def fill_xxx(number_str):
     filled = re.sub(r'[Xx]+', replace_x, number_str)
     return re.sub(r'\D', '', filled)
 
+# ===================== BUILD MARKUP (color style সহ) =====================
 def build_markup(otp_code, range_value):
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton(
+
+    # ✅ OTP বাটন — সবুজ (success) + copy
+    otp_btn = types.InlineKeyboardButton(
         text=f"🎀 {otp_code}",
         copy_text=types.CopyTextButton(text=otp_code)
-    ))
-    markup.add(types.InlineKeyboardButton(
+    )
+    otp_btn.__dict__["style"] = "success"
+    markup.add(otp_btn)
+
+    # ✅ RANGE COPY বাটন — লাল (danger) + copy
+    range_btn = types.InlineKeyboardButton(
         text="▰ RANGE COPY ▰",
         copy_text=types.CopyTextButton(text=range_value)
-    ))
-    markup.row(
-        types.InlineKeyboardButton("🤖 𝙽𝚄𝙼𝙱𝙴𝚁 𝙱𝙾𝚃", url=PANEL_BOT_URL),
-        types.InlineKeyboardButton("📲 𝙼𝙴𝚃𝙷𝙾𝙳", url=RANGE_CHANNEL_URL)
     )
+    range_btn.__dict__["style"] = "danger"
+    markup.add(range_btn)
+
+    # ✅ NUMBER BOT + METHOD বাটন — নীল (primary)
+    num_btn = types.InlineKeyboardButton(
+        text="🤖 𝙽𝚄𝙼𝙱𝙴𝚁 𝙱𝙾𝚃",
+        url=PANEL_BOT_URL
+    )
+    num_btn.__dict__["style"] = "primary"
+
+    method_btn = types.InlineKeyboardButton(
+        text="📲 𝙼𝙴𝚃𝙷𝙾𝙳",
+        url=RANGE_CHANNEL_URL
+    )
+    method_btn.__dict__["style"] = "primary"
+
+    markup.row(num_btn, method_btn)
     return markup
 
 # ===================== SEND TO CHANNEL (retry সহ) =====================
@@ -328,14 +344,11 @@ def send_to_channel(item):
         short_code   = get_short_code(country_name)
         lang         = get_language(alpha2)
 
-        # Display: masked
         filled_num     = fill_xxx(full_number)
         display_masked = filled_num[:4] + "★★" + filled_num[-4:]
 
-        # RANGE COPY: শেষ ৪ ডিজিট বাদ
         range_value = clean_num[:-4] if len(clean_num) > 4 else clean_num
 
-        # OTP বের করো
         otp_code = extract_otp(otp_msg, full_number)
         if not otp_code:
             m = re.search(r'\b\d{4,8}\b', otp_msg)
@@ -352,10 +365,17 @@ def send_to_channel(item):
         text    = build_message(display_masked, flag, short_code, service, lang)
         markup  = build_markup(otp_code, range_value)
 
-        # Retry: ৩ বার চেষ্টা করবে
         for attempt in range(3):
             try:
-                bot.send_message(CHANNEL_ID, text, reply_markup=markup)
+                sent_msg = bot.send_message(CHANNEL_ID, text, reply_markup=markup)
+                # ✅ ১২০ সেকেন্ড পর auto delete
+                def auto_delete(msg_id=sent_msg.message_id):
+                    time.sleep(120)
+                    try:
+                        bot.delete_message(CHANNEL_ID, msg_id)
+                    except Exception:
+                        pass
+                threading.Thread(target=auto_delete, daemon=True).start()
                 return True
             except Exception as e:
                 print(f"[Send Attempt {attempt+1} Failed] {e}")
@@ -378,7 +398,7 @@ def run_bot():
         try:
             r = session.get(SUCCESS_OTP_URL, timeout=15)
             data = r.json()
-            consecutive_errors = 0  # সফল হলে error count রিসেট
+            consecutive_errors = 0
 
             if data.get("meta", {}).get("code") == 200:
                 otps = data.get("data", {}).get("otps", [])
@@ -407,7 +427,6 @@ def run_bot():
             print(f"[BOT Error] {e}")
             consecutive_errors += 1
 
-        # অনেক বেশি error হলে session রিসেট
         if consecutive_errors >= 5:
             print("[BOT] Too many errors, resetting session...")
             session = requests.Session()
@@ -417,7 +436,7 @@ def run_bot():
         else:
             time.sleep(2)
 
-# ===================== WATCHDOG — বট বন্ধ হলে restart =====================
+# ===================== WATCHDOG =====================
 def watchdog():
     while True:
         time.sleep(60)
