@@ -277,13 +277,13 @@ def extract_otp(message_text, phone_number=None):
 def build_message(masked_number, flag, short_code, service, lang):
     current_time = bd_time()
     return (
-        f"┏━━━━━━━━━━━━━━━━━━┓\n"
-        f"┃ ✦ {masked_number} ✦   ┃\n"
-        f"┣━━━━━━━━━━━━━━━━━━┫\n"
-        f"┃ {flag} {short_code} • 👉 {service}┃\n"
-        f"┣━━━━━━━━━━━━━━━━━━┫\n"
+        f"┌──────────────────┐\n"
+        f"│ ✦ {masked_number} ✦   ┃\n"
+        f"├──────────────────┤\n"
+        f"┃ {flag} {short_code} • {service}┃\n"
+        f"├──────────────────┤\n"
         f"┃ ⏰ {current_time} • #{lang} ┃\n"
-        f"┗━━━━━━━━━━━━━━━━━━┛"
+        f"└──────────────────┘"
     )
 
 RANGE_CHANNEL_URL = "https://t.me/range_channele"
@@ -301,7 +301,7 @@ def build_markup(otp_code, range_value):
 
     # ✅ OTP বাটন — সবুজ (success) + copy
     otp_btn = types.InlineKeyboardButton(
-        text=f"🎀 {otp_code}",
+        text=f"{otp_code}",
         copy_text=types.CopyTextButton(text=otp_code)
     )
     otp_btn.__dict__["style"] = "success"
@@ -317,13 +317,13 @@ def build_markup(otp_code, range_value):
 
     # ✅ NUMBER BOT + METHOD বাটন — নীল (primary)
     num_btn = types.InlineKeyboardButton(
-        text="🤖 𝙽𝚄𝙼𝙱𝙴𝚁 𝙱𝙾𝚃",
+        text="𝙽𝚄𝙼𝙱𝙴𝚁 𝙱𝙾𝚃",
         url=PANEL_BOT_URL
     )
     num_btn.__dict__["style"] = "primary"
 
     method_btn = types.InlineKeyboardButton(
-        text="📲 𝙼𝙴𝚃𝙷𝙾𝙳",
+        text="𝙼𝙴𝚃𝙷𝙾𝙳",
         url=RANGE_CHANNEL_URL
     )
     method_btn.__dict__["style"] = "primary"
