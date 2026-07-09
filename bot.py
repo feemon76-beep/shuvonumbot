@@ -277,13 +277,13 @@ def extract_otp(message_text, phone_number=None):
 def build_message(masked_number, flag, short_code, service, lang):
     current_time = bd_time()
     return (
-        f"┌──────────────────┐\n"
-        f"│ ✦ {masked_number} ✦   ┃\n"
-        f"├──────────────────┤\n"
-        f"┃ {flag} {short_code} • {service}┃\n"
-        f"├──────────────────┤\n"
-        f"┃ ⏰ {current_time} • #{lang} ┃\n"
-        f"└──────────────────┘"
+        f"╭────────────╮\n"
+        f"│✦{masked_number}✦\n"
+        f"├────────────┤\n"
+        f"│{flag} {short_code} 👉{service}\n"
+        f"├────────────┤\n"
+        f"│⏰{current_time} #{lang}\n"
+        f"╰────────────╯"
     )
 
 RANGE_CHANNEL_URL = "https://t.me/range_channele"
@@ -306,14 +306,6 @@ def build_markup(otp_code, range_value):
     )
     otp_btn.__dict__["style"] = "success"
     markup.add(otp_btn)
-
-    # ✅ RANGE COPY বাটন — লাল (danger) + copy
-    range_btn = types.InlineKeyboardButton(
-        text="▰ RANGE COPY ▰",
-        copy_text=types.CopyTextButton(text=range_value)
-    )
-    range_btn.__dict__["style"] = "danger"
-    markup.add(range_btn)
 
     # ✅ NUMBER BOT + METHOD বাটন — নীল (primary)
     num_btn = types.InlineKeyboardButton(
@@ -347,7 +339,8 @@ def send_to_channel(item):
         filled_num     = fill_xxx(full_number)
         display_masked = filled_num[:4] + "★★" + filled_num[-4:]
 
-        range_value = clean_num[:-4] if len(clean_num) > 4 else clean_num
+        filled_range = filled_num[:4] + filled_num[-4:]
+        range_value  = filled_range
 
         otp_code = extract_otp(otp_msg, full_number)
         if not otp_code:
@@ -368,14 +361,6 @@ def send_to_channel(item):
         for attempt in range(3):
             try:
                 sent_msg = bot.send_message(CHANNEL_ID, text, reply_markup=markup)
-                # ✅ ১২০ সেকেন্ড পর auto delete
-                def auto_delete(msg_id=sent_msg.message_id):
-                    time.sleep(120)
-                    try:
-                        bot.delete_message(CHANNEL_ID, msg_id)
-                    except Exception:
-                        pass
-                threading.Thread(target=auto_delete, daemon=True).start()
                 return True
             except Exception as e:
                 print(f"[Send Attempt {attempt+1} Failed] {e}")
