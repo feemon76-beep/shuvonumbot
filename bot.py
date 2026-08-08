@@ -16,18 +16,12 @@ bot = telebot.TeleBot(TOKEN)
 user_states = {}
 available_numbers = {"Facebook": {"Tanzania": []}}
 user_active_numbers = {} 
-sent_otps = set()
 
 session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-})
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     first_name = message.from_user.first_name or ""
-    welcome_text = f"👋 Welcome {first_name}"
-    
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
         KeyboardButton("📱 GET NUMBER"),
@@ -37,96 +31,50 @@ def send_welcome(message):
     if message.from_user.id == ADMIN_ID:
         markup.add(KeyboardButton("⚙️ ADMIN"))
         
-    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
+    bot.send_message(message.chat.id, f"👋 Welcome {first_name}", reply_markup=markup)
 
-def login_panel():
-    """Simple login"""
+def login_and_get_otp():
+    """✅ Simple login + get OTP"""
     try:
-        print("\n🔐 Logging in...")
-        response = session.get("http://151.80.19.204/ints/signin", timeout=15)
-        print(f"   Status: {response.status_code}")
+        # Direct simple login - no complexity
+        print("\n🔐 Attempting login...")
         
-        if response.status_code != 200:
-            return False
+        # Method 1: Try direct credentials
+        r = requests.post(
+            "http://151.80.19.204/ints/signin",
+            data={
+                "username": "Nusrat005",
+                "password": "shuvomia890"
+            },
+            timeout=15,
+            allow_redirects=True
+        )
         
-        soup = BeautifulSoup(response.text, 'html.parser')
-        captcha_match = re.search(r'(\d+)\s*[\+\-\*]\s*(\d+)', soup.get_text())
+        print(f"   Status: {r.status_code}")
         
-        captcha_answer = "0"
-        if captcha_match:
-            try:
-                captcha_answer = str(eval(captcha_match.group(0)))
-            except:
-                pass
-        
-        payload = {
-            "username": "Nusrat005",
-            "password": "shuvomia890",
-            "captcha": captcha_answer
-        }
-        
-        response = session.post("http://151.80.19.204/ints/signin", data=payload, timeout=15)
-        print(f"   Login: {response.status_code}")
-        
-        return response.status_code == 200
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        return False
-
-def extract_otp_data():
-    """✅ Extract OTP using REGEX - NO BeautifulSoup parsing needed"""
-    try:
-        print("\n📊 Fetching data...")
-        response = session.get("http://151.80.19.204/ints/agent/SMSCDRStats", timeout=15)
-        print(f"   Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            return []
-        
-        records = []
-        html = response.text
-        
-        # Pattern: Extract Number and OTP from HTML
-        # Looking for: <td>261382303002</td> ... <td># 39258 is ...</td>
-        
-        # First, find all numbers
-        numbers = re.findall(r'<td[^>]*>(\d{11,15})</td>', html)
-        
-        # Then find all OTPs
-        otps = re.findall(r'<td[^>]*>#\s*(\d{4,6})', html)
-        
-        print(f"   Found {len(numbers)} numbers, {len(otps)} OTPs")
-        
-        # If we found both, pair them up
-        if numbers and otps:
-            for num, otp in zip(numbers, otps):
-                # Extract full SMS text
-                sms_pattern = f'#{otp}[^<]*'
-                sms_match = re.search(sms_pattern, html)
-                sms = sms_match.group(0) if sms_match else f"#{otp}"
+        # Get OTP data
+        if r.status_code == 200 or r.status_code == 302:
+            print("✅ Login response received, fetching OTP...")
+            
+            r2 = session.get("http://151.80.19.204/ints/agent/SMSCDRStats", timeout=15)
+            print(f"   CDR Status: {r2.status_code}")
+            
+            if r2.status_code == 200:
+                # Extract using pure regex
+                numbers = re.findall(r'<td[^>]*>(\d{11,15})</td>', r2.text)
+                otps = re.findall(r'<td[^>]*>#\s*(\d{4,6})', r2.text)
                 
-                records.append({
-                    "number": num,
-                    "code": otp,
-                    "sms": sms
-                })
-                print(f"   ✅ {num} -> {otp}")
+                records = []
+                for num, otp in zip(numbers, otps):
+                    records.append({
+                        "number": num,
+                        "code": otp
+                    })
+                    print(f"   ✅ Found: {num} -> {otp}")
+                
+                return records
         
-        # Alternative: Direct pattern matching
-        if not records:
-            print("   Trying alternative extraction...")
-            pattern = r'(\d{11,15})[^#]*#\s*(\d{4,6})[^<]*'
-            for match in re.finditer(pattern, html):
-                records.append({
-                    "number": match.group(1),
-                    "code": match.group(2),
-                    "sms": f"#{match.group(2)}"
-                })
-                print(f"   ✅ {match.group(1)} -> {match.group(2)}")
-        
-        print(f"📊 Total: {len(records)} records")
-        return records
+        return []
         
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -149,12 +97,24 @@ def handle_menu(message):
         if not data:
             bot.send_message(chat_id, "❌ No number")
             return
-        check_otp(chat_id, user_id, data['number'])
+        
+        records = login_and_get_otp()
+        
+        if not records:
+            bot.send_message(chat_id, "❌ No OTP")
+            return
+        
+        for rec in records:
+            if rec['number'] == data['number']:
+                bot.send_message(chat_id, f"✨ OTP: {rec['code']}")
+                return
+        
+        bot.send_message(chat_id, "❌ Not found")
 
     elif text == "⚙️ ADMIN" and user_id == ADMIN_ID:
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(InlineKeyboardButton("UPLOAD", callback_data="admin_upload"))
-        bot.send_message(chat_id, "⚙️ ADMIN", reply_markup=markup)
+        bot.send_message(chat_id, "ADMIN", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("service_"))
 def handle_service(call):
@@ -183,49 +143,32 @@ def handle_country(call):
         return
     
     number = nums.pop(0)
-    user_active_numbers[user_id] = {"number": number, "chat_id": chat_id}
+    user_active_numbers[user_id] = {"number": number}
     
-    msg = f"✅ Number: `{number}`"
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔍 SEARCH OTP", callback_data="search_otp"))
+    markup.add(InlineKeyboardButton("🔍 SEARCH", callback_data="search_otp"))
     
-    bot.send_message(chat_id, msg, reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(chat_id, f"✅ {number}", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "search_otp")
-def search_otp_callback(call):
+def search(call):
     chat_id = call.message.chat.id
     user_id = call.from_user.id
     data = user_active_numbers.get(user_id)
     
     if not data:
-        bot.send_message(chat_id, "No number")
         return
     
-    check_otp(chat_id, user_id, data['number'])
-
-def check_otp(chat_id, user_id, target_number):
-    """Check OTP"""
-    try:
-        if not login_panel():
-            bot.send_message(chat_id, "❌ Login failed")
+    bot.send_message(chat_id, "🔍 Searching...")
+    
+    records = login_and_get_otp()
+    
+    for rec in records:
+        if rec['number'] == data['number']:
+            bot.send_message(chat_id, f"✨ OTP: {rec['code']}")
             return
-        
-        records = extract_otp_data()
-        
-        if not records:
-            bot.send_message(chat_id, "❌ No OTP found")
-            return
-        
-        for rec in records:
-            if rec['number'] == target_number:
-                msg = f"✨ OTP FOUND!\n\n📞 {rec['number']}\n🔑 {rec['code']}\n\n{rec['sms']}"
-                bot.send_message(chat_id, msg)
-                return
-        
-        bot.send_message(chat_id, f"❌ No OTP for {target_number}")
-        
-    except Exception as e:
-        bot.send_message(chat_id, f"Error: {e}")
+    
+    bot.send_message(chat_id, "❌ Not found")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_upload")
 def admin_upload(call):
@@ -253,7 +196,6 @@ def get_service(message):
 def get_country(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
-    
     service = user_states[user_id].replace("admin_country_", "")
     country = message.text.strip()
     
@@ -278,5 +220,7 @@ def get_numbers(message):
     bot.send_message(chat_id, f"✅ {len(numbers)} added!")
 
 if __name__ == "__main__":
-    print("✅ Final Bot Started!")
+    print("✅ Ultra Simple Bot!")
     bot.infinity_polling()
+
+
