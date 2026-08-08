@@ -1,17 +1,13 @@
 import re
 import os
-import time
-import threading
 import requests
 from bs4 import BeautifulSoup
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Get from environment or use default
 TOKEN = os.getenv("BOT_TOKEN", "8738544813:AAG7WMbdgN7xXZwNGKrJrxCv6PBc_2c-0fA")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6136815573"))
 
@@ -44,7 +40,7 @@ def send_welcome(message):
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
 
 def login_panel():
-    """Panel Login"""
+    """Simple login"""
     try:
         print("\n🔐 Logging in...")
         response = session.get("http://151.80.19.204/ints/signin", timeout=15)
@@ -54,99 +50,82 @@ def login_panel():
             return False
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Solve captcha
-        print("📝 Solving captcha...")
         captcha_match = re.search(r'(\d+)\s*[\+\-\*]\s*(\d+)', soup.get_text())
         
         captcha_answer = "0"
         if captcha_match:
             try:
                 captcha_answer = str(eval(captcha_match.group(0)))
-                print(f"   Answer: {captcha_answer}")
             except:
                 pass
         
-        # Login
-        print("📤 Submitting login...")
         payload = {
             "username": "Nusrat005",
             "password": "shuvomia890",
             "captcha": captcha_answer
         }
         
-        response = session.post(
-            "http://151.80.19.204/ints/signin",
-            data=payload,
-            timeout=15,
-            allow_redirects=True
-        )
-        print(f"   Status: {response.status_code}")
+        response = session.post("http://151.80.19.204/ints/signin", data=payload, timeout=15)
+        print(f"   Login: {response.status_code}")
         
-        print("✅ Login done!")
-        return True
+        return response.status_code == 200
         
     except Exception as e:
-        print(f"❌ Login error: {e}")
+        print(f"❌ Error: {e}")
         return False
 
-def fetch_otp_data():
-    """Fetch OTP from SMSCDRStats"""
+def extract_otp_data():
+    """✅ Extract OTP using REGEX - NO BeautifulSoup parsing needed"""
     try:
-        print("\n📊 Fetching OTP data...")
-        
-        response = session.get(
-            "http://151.80.19.204/ints/agent/SMSCDRStats",
-            timeout=15
-        )
-        
-        print(f"Status: {response.status_code}")
+        print("\n📊 Fetching data...")
+        response = session.get("http://151.80.19.204/ints/agent/SMSCDRStats", timeout=15)
+        print(f"   Status: {response.status_code}")
         
         if response.status_code != 200:
-            print(f"❌ Failed")
             return []
         
-        print("🔍 Parsing...")
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
         records = []
+        html = response.text
         
-        # Find table
-        table = soup.find('table')
-        if table:
-            print("✅ Table found!")
-            rows = table.find_all('tr')[1:]
-            
-            for row in rows:
-                cells = row.find_all(['td', 'th'])
-                if len(cells) >= 7:
-                    try:
-                        col3 = cells[2].get_text(strip=True)
-                        col6 = cells[5].get_text(strip=True)
-                        
-                        num_match = re.search(r'(\d{11,15})', col3)
-                        otp_match = re.search(r'#\s*(\d{4,6})', col6)
-                        
-                        if num_match and otp_match:
-                            records.append({
-                                "number": num_match.group(1),
-                                "code": otp_match.group(1),
-                                "sms": col6
-                            })
-                            print(f"  ✅ {num_match.group(1)} -> {otp_match.group(1)}")
-                    except:
-                        pass
-        else:
-            print("❌ Table not found, trying fallback...")
-            pattern = r'(\d{11,15})[^#]*#\s*(\d{4,6})'
-            for match in re.finditer(pattern, response.text):
+        # Pattern: Extract Number and OTP from HTML
+        # Looking for: <td>261382303002</td> ... <td># 39258 is ...</td>
+        
+        # First, find all numbers
+        numbers = re.findall(r'<td[^>]*>(\d{11,15})</td>', html)
+        
+        # Then find all OTPs
+        otps = re.findall(r'<td[^>]*>#\s*(\d{4,6})', html)
+        
+        print(f"   Found {len(numbers)} numbers, {len(otps)} OTPs")
+        
+        # If we found both, pair them up
+        if numbers and otps:
+            for num, otp in zip(numbers, otps):
+                # Extract full SMS text
+                sms_pattern = f'#{otp}[^<]*'
+                sms_match = re.search(sms_pattern, html)
+                sms = sms_match.group(0) if sms_match else f"#{otp}"
+                
+                records.append({
+                    "number": num,
+                    "code": otp,
+                    "sms": sms
+                })
+                print(f"   ✅ {num} -> {otp}")
+        
+        # Alternative: Direct pattern matching
+        if not records:
+            print("   Trying alternative extraction...")
+            pattern = r'(\d{11,15})[^#]*#\s*(\d{4,6})[^<]*'
+            for match in re.finditer(pattern, html):
                 records.append({
                     "number": match.group(1),
                     "code": match.group(2),
-                    "sms": response.text[match.start():match.end()][:80]
+                    "sms": f"#{match.group(2)}"
                 })
+                print(f"   ✅ {match.group(1)} -> {match.group(2)}")
         
-        print(f"📊 Total: {len(records)} OTPs")
+        print(f"📊 Total: {len(records)} records")
         return records
         
     except Exception as e:
@@ -208,7 +187,7 @@ def handle_country(call):
     
     msg = f"✅ Number: `{number}`"
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔍 SEARCH", callback_data="search_otp"))
+    markup.add(InlineKeyboardButton("🔍 SEARCH OTP", callback_data="search_otp"))
     
     bot.send_message(chat_id, msg, reply_markup=markup, parse_mode="Markdown")
 
@@ -231,7 +210,7 @@ def check_otp(chat_id, user_id, target_number):
             bot.send_message(chat_id, "❌ Login failed")
             return
         
-        records = fetch_otp_data()
+        records = extract_otp_data()
         
         if not records:
             bot.send_message(chat_id, "❌ No OTP found")
@@ -239,7 +218,7 @@ def check_otp(chat_id, user_id, target_number):
         
         for rec in records:
             if rec['number'] == target_number:
-                msg = f"✨ OTP!\n\n📞 {rec['number']}\n🔑 {rec['code']}\n\n{rec['sms']}"
+                msg = f"✨ OTP FOUND!\n\n📞 {rec['number']}\n🔑 {rec['code']}\n\n{rec['sms']}"
                 bot.send_message(chat_id, msg)
                 return
         
@@ -299,9 +278,5 @@ def get_numbers(message):
     bot.send_message(chat_id, f"✅ {len(numbers)} added!")
 
 if __name__ == "__main__":
-    print("✅ Bot Started on Render!")
-    print(f"Token: {TOKEN[:20]}...")
-    print(f"Admin: {ADMIN_ID}")
+    print("✅ Final Bot Started!")
     bot.infinity_polling()
-
-
