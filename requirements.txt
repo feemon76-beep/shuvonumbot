@@ -1,7 +1,0 @@
-requests==2.31.0
-pyTelegramBotAPI==4.14.0
-pycountry==23.12.11
-phonenumbers==8.13.0
-flask==3.0.0
-python-dotenv==1.0.0
-beautifulsoup4==4.12.2
